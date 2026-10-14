@@ -71,6 +71,39 @@ static void append_late_extra_func(GameConfig *cfg, uint32_t addr) {
     cfg->late_extra_funcs[cfg->late_extra_func_count++] = addr;
 }
 
+static void append_inline_data_callee(GameConfig *cfg, uint32_t addr,
+                                      uint16_t fixed_size) {
+    int cap = cfg->inline_data_callee_cap;
+    cfg->inline_data_callees = grow_to_fit(
+        cfg->inline_data_callees,
+        &cfg->inline_data_callee_cap,
+        cfg->inline_data_callee_count,
+        sizeof(uint32_t));
+    if (cfg->inline_data_callee_cap != cap || !cfg->inline_data_sizes) {
+        uint16_t *sizes = realloc(cfg->inline_data_sizes,
+            (size_t)cfg->inline_data_callee_cap * sizeof(uint16_t));
+        if (!sizes) { perror("realloc"); exit(1); }
+        cfg->inline_data_sizes = sizes;
+    }
+    cfg->inline_data_sizes[cfg->inline_data_callee_count] = fixed_size;
+    cfg->inline_data_callees[cfg->inline_data_callee_count++] = addr;
+}
+
+bool game_config_inline_data_size(const GameConfig *cfg, uint32_t addr,
+                                  uint32_t *fixed_size) {
+    if (!cfg) return false;
+    for (int i = 0; i < cfg->inline_data_callee_count; i++)
+        if (cfg->inline_data_callees[i] == addr) {
+            if (fixed_size) *fixed_size = cfg->inline_data_sizes[i];
+            return true;
+        }
+    return false;
+}
+
+bool game_config_is_inline_data_callee(const GameConfig *cfg, uint32_t addr) {
+    return game_config_inline_data_size(cfg, addr, NULL);
+}
+
 static void append_function_pointer_helper(GameConfig *cfg, uint32_t addr) {
     cfg->function_pointer_helpers = grow_to_fit(
         cfg->function_pointer_helpers,
@@ -275,6 +308,32 @@ static bool merge_toml(GameConfig *cfg, toml_table_t *root, const char *src_path
                 if (d.ok) append_late_extra_func(cfg, (uint32_t)d.u.i);
             }
         }
+        toml_array_t *inline_callees =
+            toml_array_in(funcs, "inline_data_callees");
+        if (inline_callees) {
+            int n = toml_array_nelem(inline_callees);
+            for (int i = 0; i < n; i++) {
+                toml_datum_t d = toml_int_at(inline_callees, i);
+                if (d.ok)
+                    append_inline_data_callee(cfg, (uint32_t)d.u.i, 0);
+            }
+        }
+        toml_array_t *inline_fixed = toml_array_in(funcs, "inline_data_fixed");
+        if (inline_fixed) {
+            int n = toml_array_nelem(inline_fixed);
+            for (int i = 0; i < n; i++) {
+                toml_array_t *pair = toml_array_at(inline_fixed, i);
+                toml_datum_t a = pair ? toml_int_at(pair, 0) : (toml_datum_t){0};
+                toml_datum_t z = pair ? toml_int_at(pair, 1) : (toml_datum_t){0};
+                if (!a.ok || !z.ok || z.u.i < 2 || (z.u.i & 1) || z.u.i > 0xFFFF) {
+                    fprintf(stderr, "[config] inline_data_fixed[%d] must be "
+                            "[callee, even size >= 2]\n", i);
+                    exit(1);
+                }
+                append_inline_data_callee(cfg, (uint32_t)a.u.i,
+                                          (uint16_t)z.u.i);
+            }
+        }
         toml_array_t *pointer_helpers =
             toml_array_in(funcs, "function_pointer_helpers");
         if (pointer_helpers) {
@@ -340,6 +399,8 @@ void game_config_free(GameConfig *cfg) {
     free(cfg->extra_funcs);
     free(cfg->late_extra_funcs);
     free(cfg->function_pointer_helpers);
+    free(cfg->inline_data_callees);
+    free(cfg->inline_data_sizes);
     free(cfg->extra_seeds);
     free(cfg->blacklist);
     free(cfg->protected_ranges);
