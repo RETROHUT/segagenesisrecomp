@@ -441,6 +441,19 @@ void glue_reset_frame_sync(void)
 /* Re-entrancy guard (used by glue_check_vblank, must be in global scope) */
 static int s_in_vblank_service = 0;
 
+/* irq_z80_bus_catchup bookkeeping (g_game_spec opt-in; see irq_z80_bus_write).
+ * Only meaningful inside one atomic handler, and reset at its entry. */
+static int      s_irq_z80_released    = 0;   /* bus released since handler entry */
+static uint32_t s_irq_z80_release_cyc = 0;   /* g_audio_cycle_counter at release */
+static uint32_t s_irq_z80_borrowed    = 0;   /* Z80 cycles run ahead this handler */
+
+static void irq_z80_catchup_reset(void)
+{
+    s_irq_z80_released    = 0;
+    s_irq_z80_release_cyc = 0;
+    s_irq_z80_borrowed    = 0;
+}
+
 #include "game_spec.h"      /* g_game_spec.call_entry_point / vblank / hblank / periodic */
 
 
@@ -844,6 +857,7 @@ static void own_deliver_vint(GVDP *vdp)
     for (int i = 0; i < 256; i++) save[i] = g_ram[(byteoff + i) & 0xFFFFu];
     g_cpu.A[7] = STK;
     s_in_vblank_service = 1;
+    irq_z80_catchup_reset();
     uint32_t saved_rebase = g_68k_stamp_rebase;
     g_68k_stamp_rebase = machine_z80_stamp() - g_audio_cycle_counter * 7u;
     g_rte_pending = 0; g_rte_pending_ptr = &s_rte_dummy; g_rte_pending = 0;
@@ -1007,6 +1021,7 @@ void glue_own_interrupt(int level, GVDP *vdp)
         for (int i = 0; i < 256; i++) save[i] = g_ram[(byteoff + i) & 0xFFFFu];
         g_cpu.A[7] = STK;
         s_in_vblank_service = 1;
+        irq_z80_catchup_reset();
         /* Same audio-stamp re-base as own_deliver_vint: H-int handler chip
          * writes stamp at the delivery raster, not the parked counter. */
         uint32_t saved_rebase = g_68k_stamp_rebase;
@@ -1704,11 +1719,37 @@ uint32_t m68k_read32(uint32_t byte_addr)
     return ((uint32_t)hi << 16) | (uint32_t)lo;
 }
 
+/* Z80 bus request/release ($A11100) inside an atomic interrupt handler, for
+ * games that opt in with g_game_spec.irq_z80_bus_catchup. The handler runs with
+ * the Z80 frozen, so a "request bus, read Z80 RAM, release, delay, retry" wait
+ * for the sound driver never ends. On a re-request, first run the Z80 for the
+ * 68K time spent since the release (the delay loop), as on hardware, borrowed
+ * from the following scanlines. Capped at one frame of Z80 time per handler,
+ * so a dead driver still hangs loudly on the instruction watchdog instead of
+ * starving the Z80 for good. Called before the write reaches the bus;
+ * `request` is the written BUSREQ bit. */
+static void irq_z80_bus_write(uint32_t byte_addr, int request)
+{
+    if (byte_addr != 0xA11100u || !s_in_vblank_service || !g_game_spec.irq_z80_bus_catchup)
+        return;
+    if (!request) {
+        s_irq_z80_released    = 1;
+        s_irq_z80_release_cyc = g_audio_cycle_counter;
+        return;
+    }
+    if (!s_irq_z80_released) return;
+    s_irq_z80_released = 0;
+    s_irq_z80_borrowed += machine_z80_catch_up(
+        g_audio_cycle_counter - s_irq_z80_release_cyc,
+        machine_z80_cycles_per_frame() - s_irq_z80_borrowed);
+}
+
 void m68k_write16(uint32_t byte_addr, uint16_t val)
 {
     byte_addr &= 0xFFFFFFu;
     watchdog_check(byte_addr, 1, val);
     bus_ring_push(byte_addr, 4);
+    irq_z80_bus_write(byte_addr, (val & 0x0100u) != 0);
     /* 16-bit FM writes land one byte per port per cycle on hardware. The
      * YM2612 only takes 8-bit data; SMPS always uses 8-bit writes. Be
      * defensive: if a 16-bit write hits the FM bus, treat the low byte
@@ -1727,6 +1768,7 @@ void m68k_write8(uint32_t byte_addr, uint8_t val)
     byte_addr &= 0xFFFFFFu;
     watchdog_check(byte_addr, 1, val);
     bus_ring_push(byte_addr, 3);
+    irq_z80_bus_write(byte_addr, (val & 0x01u) != 0);
     audio_detour_write(byte_addr, val);
     if (s_io_log_enabled && byte_addr >= 0xA10000u && byte_addr <= 0xA1001Fu) {
         if (s_io_log_count < 200) {

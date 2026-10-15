@@ -94,6 +94,16 @@ typedef struct GameSpec {
      * cartridge uploads a different sound-driver image into Z80 RAM. */
     void      (*z80_step)(void);
 
+    /* Opt-in: let the Z80 run while the 68K waits on it inside an atomic
+     * interrupt handler (0 = off). Atomic V-int/H-int delivery runs the whole
+     * handler with the Z80 frozen, so a handler that sends a sound command and
+     * waits for the Z80 driver to acknowledge (request bus, read Z80 RAM,
+     * release, delay, retry) spins forever. With this set, each bus re-request
+     * inside such a handler first runs the Z80 for the 68K time spent since the
+     * release, borrowed from the following scanlines. Games whose handlers
+     * never wait on the Z80 leave it 0 and keep exact timing. */
+    int         irq_z80_bus_catchup;
+
     /* ---- Battery SRAM override ---- */
     /* Explicit SRAM geometry for carts whose standard header ($1B0 "RA"
      * + BE start/end longwords) does NOT declare it. The Sonic 3 &

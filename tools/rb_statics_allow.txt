@@ -36,6 +36,9 @@
 ^s_scratch$
 ^_ZN12_GLOBAL__N_1L9s_scratchE$
 ^evs\.[0-9]+$
+# irq_z80_bus_catchup bookkeeping: all three reset at the entry of every atomic
+# interrupt handler and only read inside it (no tick boundary falls inside one)
+^s_irq_z80_(released|release_cyc|borrowed)$
 # per-scanline cursors reset at the start of every line (machine_run_frame)
 ^s_z80_off$
 ^s_line_base$
