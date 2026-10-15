@@ -1,6 +1,7 @@
 [submodule "external/m68k-recomp-core"]
 	path = external/m68k-recomp-core
-	url = https://github.com/mstan/m68k-recomp-core.git
+	url = https://github.com/RETROHUT/m68k-recomp-core.git
+	branch = retrohut/main
 [submodule "external/z80-recomp-core"]
 	path = external/z80-recomp-core
 	url = https://github.com/mstan/z80-recomp-core.git
