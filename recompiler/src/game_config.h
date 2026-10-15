@@ -209,6 +209,21 @@ typedef struct {
     uint32_t       *function_pointer_helpers;
     int            function_pointer_helper_count;
     int            function_pointer_helper_cap;
+    /* Callees that take inline data after the call site: the caller's code
+     * resumes past a block of data that follows the JSR/BSR, and the callee
+     * moves its return address there (EA's text printers:
+     * `MOVE.L A1,-(SP); MOVEA.L 4(SP),A1; ...; MOVE.L A1,4(SP); ...; RTS`).
+     * The block starts with a big-endian word giving its length in bytes,
+     * that word included. Discovery and codegen skip the block and continue
+     * at call_end + length instead of decoding the data as code. */
+    uint32_t       *inline_data_callees;
+    /* Parallel to inline_data_callees: 0 = length-prefixed block (above);
+     * N > 0 = a fixed N-byte block with no length word, for callees that
+     * step their return address by a constant
+     * ([functions].inline_data_fixed = [[callee, N], ...]). */
+    uint16_t       *inline_data_sizes;
+    int            inline_data_callee_count;
+    int            inline_data_callee_cap;
     /* Additional INTERIOR PCs to seed scan_function's CFG-walk worklist.
      * Sourced from disasm local labels (asm68k `.foo` scoped under a
      * parent global label). NOT promoted to function entries — they're
@@ -282,6 +297,13 @@ const WsSite *game_config_ws_site(const GameConfig *cfg, uint32_t addr);
 
 /* Returns true if addr falls in a protected range (no boundary splitting) */
 bool game_config_is_protected(const GameConfig *cfg, uint32_t addr);
+
+/* Returns true if addr is a configured inline-data callee
+ * ([functions].inline_data_callees). */
+bool game_config_is_inline_data_callee(const GameConfig *cfg, uint32_t addr);
+/* As above, and reports the block size: 0 = length-prefixed, else bytes. */
+bool game_config_inline_data_size(const GameConfig *cfg, uint32_t addr,
+                                  uint32_t *fixed_size);
 
 /* Returns true if addr is in the blacklist */
 bool game_config_is_blacklisted(const GameConfig *cfg, uint32_t addr);
