@@ -3530,8 +3530,9 @@ session_begin:;
             if (input_script_should_exit()) {
                 fprintf(stderr, "[input_script] exiting per script directive (code=%d)\n",
                         input_script_exit_code());
-                if (s_sram_dirty) runner_sram_flush();
-                return input_script_exit_code();
+                /* Leave through the normal shutdown below (exit summaries,
+                 * --wav header, SRAM flush), keeping the script's exit code. */
+                break;
             }
         }
 
@@ -3754,7 +3755,7 @@ session_begin:;
         /* The host is the SRAM authority: its save is written once, now. */
         if (s_sram_dirty || sram_battery_present()) runner_sram_flush();
         if (refusal) genesis_host_lobby_set_runtime_error(refusal);
-        if (netplay_next_session(&netplay_config, session_round)) {
+        if (!input_script_should_exit() && netplay_next_session(&netplay_config, session_round)) {
             genesis_session_reset(rom_path);
             session_round++;
             goto session_begin;
@@ -3888,5 +3889,6 @@ session_begin:;
     SDL_DestroyWindow(window);
     SDL_Quit();
     free(rom_buf);
+    if (input_script_should_exit()) return input_script_exit_code();
     return runtime_measure_frames && frame_num != runtime_measure_frames ? 2 : 0;
 }
