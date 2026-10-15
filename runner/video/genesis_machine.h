@@ -55,5 +55,9 @@ int    machine_rb_load(const void *src, size_t len);
 /* Run one full frame: per scanline, advance the 68K (fiber), step the Z80, tick
  * the VDP, deliver interrupts, and emit active scanlines via `sink`. */
 void machine_run_frame(GenesisScanlineSink sink, void *user);
+/* Run the Z80 for `m68k_cycles` of 68K time (at most `budget` Z80 cycles),
+ * borrowed from the following scanlines. Returns the Z80 cycles charged. */
+uint32_t machine_z80_catch_up(uint32_t m68k_cycles, uint32_t budget);
+uint32_t machine_z80_cycles_per_frame(void);
 
 #endif /* GENESIS_MACHINE_H */

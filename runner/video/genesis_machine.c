@@ -466,6 +466,31 @@ static void step_z80(GenesisMachine *m, uint32_t target)
 #endif
 }
 
+/* Run the Z80 for the time `m68k_cycles` of 68K work take, now, and owe it
+ * back through z80_cycle_debt, so the following scanlines' step_z80 calls skip
+ * the same amount: the Z80's time per frame is unchanged, only moved earlier.
+ * At most `budget` Z80 cycles are run. Returns the Z80 cycles charged (0 when
+ * the Z80 is halted). Used when the 68K waits on the Z80 inside an atomic
+ * interrupt handler (glue.c, irq_z80_bus_catchup). */
+uint32_t machine_z80_catch_up(uint32_t m68k_cycles, uint32_t budget)
+{
+    GenesisMachine *m = &g_machine;
+    if (!m->bus.z80_reset_off || m->bus.z80_busreq) return 0;
+    /* 68K runs at master/7, the Z80 at master/MASTER_PER_Z80. */
+    uint32_t cycles = (uint32_t)(((uint64_t)m68k_cycles * 7u) / MASTER_PER_Z80);
+    if (cycles > budget) cycles = budget;
+    if (!cycles) return 0;
+    uint32_t target = m->z80_cycle_debt + cycles;
+    step_z80(m, target);           /* leaves z80_cycle_debt = overshoot past target */
+    m->z80_cycle_debt += target;   /* everything run ahead is owed to later lines */
+    return cycles;
+}
+
+uint32_t machine_z80_cycles_per_frame(void)
+{
+    return Z80_PER_LINE * LINES_TOTAL;
+}
+
 void machine_run_frame(GenesisScanlineSink sink, void *user)
 {
     GenesisMachine *m = &g_machine;
