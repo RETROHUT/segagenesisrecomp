@@ -170,20 +170,29 @@ void gbus_sram_set_geometry(GenesisBus *b, uint32_t start, uint32_t end)
     if (start == 0u) return;                     /* not requested            */
     uint32_t base = start & ~1u;
     if (end > base && (end - base + 1u) <= sizeof(b->sram)) {
-        b->sram_present = 1;
-        b->sram_base    = base;
-        b->sram_end     = end;
-        b->sram_size    = end - base + 1u;
+        b->sram_present  = 1;
+        b->sram_override = 1;
+        b->sram_base     = base;
+        b->sram_end      = end;
+        b->sram_size     = end - base + 1u;
     }
+}
+
+/* Some boards decode SRAM above the ROM directly and have no overlay latch
+ * (NHL 96: battery RAM at $200001+, never a write to $A130F1). Only the spec
+ * override can ask for this, so a self-describing "RA" cart keeps its gate. */
+void gbus_sram_set_ungated(GenesisBus *b)
+{
+    if (b->sram_override) b->sram_ungated = 1;
 }
 
 /* SRAM overlay active for this address? The $A130F1 enable bit gates the
  * overlay when the SRAM range shadows ROM (cart < 4 MB games still toggle it;
- * honour the bit always — games that never touch $A130F1 and expect
- * always-mapped SRAM can be handled when one shows up). */
+ * honour the bit unless the spec marked the board ungated — games that never
+ * touch $A130F1 and expect always-mapped SRAM, see gbus_sram_set_ungated). */
 static int sram_hit(const GenesisBus *b, uint32_t a)
 {
-    return b->sram_present && b->sram_enabled
+    return b->sram_present && (b->sram_enabled || b->sram_ungated)
         && a >= b->sram_base && a <= b->sram_end;
 }
 

@@ -157,21 +157,31 @@ static int s_rte_real  = 0;
 static int s_rte_dummy = 0;
 int *g_rte_pending_ptr = &s_rte_real;
 
+/* Bytes of arguments a returning callee asked its JSR wrapper to drop (see
+ * genesis_runtime.h). Set at a callee's RTS, consumed by the wrapper; an
+ * interrupt delivered at that RTS must not see or clear it. */
+uint32_t g_ret_arg_drop = 0;
+
+typedef struct { int split_sp_popped; uint32_t ret_arg_drop; } RecompIrqContext;
+
 /* Interrupt handlers enter the recompiler from the scheduler while the main
  * game fiber can be suspended in the middle of a split-function chain.
  * g_cpu/A7 and the RTE signal already have IRQ-local save/restore handling;
- * isolate the split-stack counter as well so handler tail calls cannot erase
- * the interrupted chain's pending stack adjustments. */
-static int recomp_interrupt_context_enter(void)
+ * isolate the split-stack counter (and a pending g_ret_arg_drop) as well so
+ * handler tail calls cannot erase the interrupted chain's pending stack
+ * adjustments. */
+static RecompIrqContext recomp_interrupt_context_enter(void)
 {
-    int saved = g_split_sp_popped;
+    RecompIrqContext saved = { g_split_sp_popped, g_ret_arg_drop };
     g_split_sp_popped = 0;
+    g_ret_arg_drop = 0;
     return saved;
 }
 
-static void recomp_interrupt_context_leave(int saved)
+static void recomp_interrupt_context_leave(RecompIrqContext saved)
 {
-    g_split_sp_popped = saved;
+    g_split_sp_popped = saved.split_sp_popped;
+    g_ret_arg_drop = saved.ret_arg_drop;
 }
 
 int       g_early_return      = 0;
@@ -853,7 +863,7 @@ static void own_deliver_vint(GVDP *vdp)
     uint32_t byteoff = (STK - 256u) & 0xFFFFu;
     uint8_t save[256];
     M68KState saved = g_cpu;
-    int saved_split_sp_popped = recomp_interrupt_context_enter();
+    RecompIrqContext saved_ctx = recomp_interrupt_context_enter();
     for (int i = 0; i < 256; i++) save[i] = g_ram[(byteoff + i) & 0xFFFFu];
     g_cpu.A[7] = STK;
     s_in_vblank_service = 1;
@@ -914,7 +924,7 @@ static void own_deliver_vint(GVDP *vdp)
     s_in_vblank_service = 0;
     for (int i = 0; i < 256; i++) g_ram[(byteoff + i) & 0xFFFFu] = save[i];
     g_cpu = saved;
-    recomp_interrupt_context_leave(saved_split_sp_popped);
+    recomp_interrupt_context_leave(saved_ctx);
     s_game_yielded_vblank = 0;
 }
 
@@ -935,7 +945,7 @@ static void own_run_handler_interleaved(int level, GVDP *vdp)
     uint32_t byteoff = (STK - 256u) & 0xFFFFu;
     uint8_t save[256];
     M68KState saved = g_cpu;
-    int saved_split_sp_popped = recomp_interrupt_context_enter();
+    RecompIrqContext saved_ctx = recomp_interrupt_context_enter();
     for (int i = 0; i < 256; i++) save[i] = g_ram[(byteoff + i) & 0xFFFFu];
     g_cpu.A[7] = STK;
     g_cpu.SR = (uint16_t)((g_cpu.SR & ~0x0700u) | ((uint16_t)(level & 7) << 8));
@@ -951,7 +961,7 @@ static void own_run_handler_interleaved(int level, GVDP *vdp)
     vdp->in_vblank = saved_vb;
     for (int i = 0; i < 256; i++) g_ram[(byteoff + i) & 0xFFFFu] = save[i];
     g_cpu = saved;
-    recomp_interrupt_context_leave(saved_split_sp_popped);
+    recomp_interrupt_context_leave(saved_ctx);
     s_irq_in_progress = 0;
     s_game_yielded_vblank = 0;
 }
@@ -1017,7 +1027,7 @@ void glue_own_interrupt(int level, GVDP *vdp)
         uint32_t byteoff = (STK - 256u) & 0xFFFFu;
         uint8_t save[256];
         M68KState saved = g_cpu;
-        int saved_split_sp_popped = recomp_interrupt_context_enter();
+        RecompIrqContext saved_ctx = recomp_interrupt_context_enter();
         for (int i = 0; i < 256; i++) save[i] = g_ram[(byteoff + i) & 0xFFFFu];
         g_cpu.A[7] = STK;
         s_in_vblank_service = 1;
@@ -1042,7 +1052,7 @@ void glue_own_interrupt(int level, GVDP *vdp)
         s_in_vblank_service = 0;
         for (int i = 0; i < 256; i++) g_ram[(byteoff + i) & 0xFFFFu] = save[i];
         g_cpu = saved;
-        recomp_interrupt_context_leave(saved_split_sp_popped);
+        recomp_interrupt_context_leave(saved_ctx);
     }
 }
 

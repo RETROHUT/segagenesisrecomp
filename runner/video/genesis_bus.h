@@ -72,7 +72,9 @@ typedef struct GenesisBus {
     uint32_t sram_end;                  /* inclusive end address              */
     uint32_t sram_size;                 /* bytes spanned (0 = none)           */
     uint8_t  sram_present;              /* "RA" header found                  */
+    uint8_t  sram_override;             /* mapped by GameSpec, not the header */
     uint8_t  sram_enabled;              /* $A130F1 bit0 overlay state         */
+    uint8_t  sram_ungated;              /* mapped regardless of $A130F1       */
 } GenesisBus;
 
 void gbus_init(GenesisBus *b, GVDP *vdp);
@@ -87,6 +89,11 @@ void gbus_sram_setup(GenesisBus *b);
  * marker already mapped SRAM (gbus_sram_setup wins) or the range is invalid /
  * larger than the SRAM buffer. Must run AFTER gbus_sram_setup. */
 void gbus_sram_set_geometry(GenesisBus *b, uint32_t start, uint32_t end);
+
+/* Map that override SRAM at all times, ignoring the $A130F1 overlay latch
+ * (GameSpec.sram_ungated). No-op unless gbus_sram_set_geometry mapped it:
+ * a header "RA" cart keeps its latch. */
+void gbus_sram_set_ungated(GenesisBus *b);
 
 uint16_t gbus_read16 (GenesisBus *b, uint32_t addr);
 uint8_t  gbus_read8  (GenesisBus *b, uint32_t addr);

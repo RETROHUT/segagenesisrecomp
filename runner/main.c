@@ -2779,6 +2779,12 @@ int main(int argc, char *argv[])
      * declared SRAM or the spec leaves sram_start at 0. */
     gbus_sram_set_geometry(&g_machine.bus,
                            g_game_spec.sram_start, g_game_spec.sram_end);
+    if (g_game_spec.sram_ungated) {
+        gbus_sram_set_ungated(&g_machine.bus);
+        if (!g_machine.bus.sram_ungated)
+            fprintf(stderr, "[SRAM] sram_ungated ignored: no spec-mapped SRAM "
+                    "(header \"RA\" present, or range rejected)\n");
+    }
     runner_sram_init_and_load(rom_path);
 
 #if GENESIS_HAS_RECOMP_NET
