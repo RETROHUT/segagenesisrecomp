@@ -121,6 +121,12 @@ typedef struct GameSpec {
      * cart). */
     uint32_t    sram_start;
     uint32_t    sram_end;
+    /* Nonzero: the board decodes that SRAM range at all times, with no
+     * $A130F1 overlay latch. For carts whose SRAM lies above a ROM of 2 MB or
+     * less and which never write $A130F1 (NHL 96 keeps roster data at
+     * $200001+ this way). Only applies to the sram_start/sram_end override;
+     * 0 keeps the latch, as before. */
+    int         sram_ungated;
 
     /* ---- Entry points (recompiled C) ---- */
     /* Called once on the game thread. Must contain the game's main

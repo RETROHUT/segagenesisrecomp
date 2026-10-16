@@ -189,6 +189,13 @@ extern int *g_rte_pending_ptr;
  * interrupted chain's value before resuming it. */
 extern int g_split_sp_popped;
 
+/* Arguments dropped by a callee on return. `MOVE.L (SP)+,(SP); RTS` moves the
+ * return address up over a 4-byte argument, so the caller resumes with it
+ * gone. Generated code leaves A7 alone there and adds 4 here instead; the
+ * caller's JSR wrapper pops its return slot as usual, then drops this many
+ * bytes and clears it. */
+extern uint32_t g_ret_arg_drop;
+
 /* ---- Early return (addq.l #4,sp + rts pattern) ---- */
 /* 68K code uses "addq.l #4,sp" to discard a return address, then "rts" to
  * return to the caller's caller (skipping the rest of the current routine).
