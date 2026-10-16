@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include "genesis_vdp.h"
+#include "ym_timers.h"
 
 /* Pad button bits (1 = pressed) in our internal representation. Low byte is the
  * 3-button set; the high nibble is the 6-button extension (X/Y/Z/Mode), surfaced
@@ -40,15 +41,9 @@ typedef struct GenesisBus {
 
     /* YM2612 timer/status state. Audio register writes are rendered later by
      * the cycle-stamped mixer, but the emulated CPUs must observe timer flags
-     * synchronously while polling $4000/$A04000 (RKA's Z80 driver uses timer
-     * B as its music tick). */
+     * synchronously while polling $4000/$A04000 (see ym_timers.h). */
     uint8_t  ym_addr[2];                /* address latch for ports 0/1         */
-    uint8_t  ym_timer_b;                /* register $26                        */
-    uint8_t  ym_mode;                   /* register $27                        */
-    uint8_t  ym_status;                 /* timer overflow flags, bits 1..0     */
-    uint8_t  ym_timer_b_running;
-    uint64_t ym_timer_b_deadline;       /* absolute scheduler master cycles    */
-    uint64_t ym_timer_b_period;         /* cached period in master cycles      */
+    YmTimers ym_timers;
 
     /* Controllers / I-O. */
     uint16_t pad[2];                    /* live button state (GPAD_* bits, 12) */

@@ -50,6 +50,15 @@ else()
 endif()
 add_test(NAME display_width COMMAND display_width_test)
 
+add_executable(ym_timers_test runtime/ym_timers_test.c)
+target_include_directories(ym_timers_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../runner")
+if(MSVC)
+    target_compile_options(ym_timers_test PRIVATE /UNDEBUG)
+else()
+    target_compile_options(ym_timers_test PRIVATE -UNDEBUG)
+endif()
+add_test(NAME ym_timers COMMAND ym_timers_test)
+
 find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME generated_input_paths COMMAND "${Python3_EXECUTABLE}"
