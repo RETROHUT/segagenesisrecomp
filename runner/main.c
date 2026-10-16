@@ -27,6 +27,7 @@
 
 #include "backend_decls.h"   /* own decls — native builds have no clownmdemu paths */
 #include "genesis_clocks.h"
+#include "display_width.h"
 #include "frame_pacer.h"
 #include "audio.h"
 #include "cosim.h"
@@ -472,6 +473,12 @@ static int display_logical_height(void)
     return s_screen_height;
 }
 
+/* Logical width of the presented picture: H32 frames fill the H40 width. */
+static int display_logical_width(void)
+{
+    return display_width_for_frame(s_screen_width);
+}
+
 static void update_render_logical_size(SDL_Renderer *renderer)
 {
     static SDL_Renderer *s_last_renderer = NULL;
@@ -488,7 +495,7 @@ static void update_render_logical_size(SDL_Renderer *renderer)
         w = ws_canvas_w();
         h = ws_canvas_h();
     } else {
-        w = s_screen_width;
+        w = display_logical_width();
         h = display_logical_height();
     }
 
@@ -2040,9 +2047,10 @@ static void local_states_modal(SDL_Renderer *renderer, SDL_Texture *game,
         if (!genesis_local_states_overlay(&pixels, &pw, &ph)) break;
         SDL_UpdateTexture(panel, NULL, pixels, pw * (int)sizeof(uint32_t));
         SDL_Rect src = {0, 0, s_screen_width, s_screen_height};
+        int lw = display_logical_width();
         int dw = s_screen_height * pw / ph;
-        if (dw > s_screen_width) dw = s_screen_width;
-        SDL_Rect dst = {(s_screen_width - dw) / 2, 0, dw, s_screen_height};
+        if (dw > lw) dw = lw;
+        SDL_Rect dst = {(lw - dw) / 2, 0, dw, s_screen_height};
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, game, &src, NULL);
         SDL_RenderCopy(renderer, panel, NULL, &dst);
