@@ -224,3 +224,29 @@ genesisrecomp_register_test(m68k_effective_address_test)
 target_include_directories(m68k_effective_address_test PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../runner/include"
 )
+
+# ---------------------------------------------------------------------------
+# codegen_stack_byte_step_test — byte-sized -(A7)/(A7)+ step A7 by 2 in the
+# generated C (the 68000 keeps the stack word-aligned); other An step by 1.
+# ---------------------------------------------------------------------------
+include("${CMAKE_CURRENT_LIST_DIR}/../external/m68k-recomp-core/cmake/M68kRecompCore.cmake")
+m68k_recomp_core_sources(CODEGEN_TEST_CORE_SOURCES genesis)
+m68k_recomp_core_include_dirs(CODEGEN_TEST_CORE_INCLUDE_DIRS genesis)
+add_executable(codegen_stack_byte_step_test
+    harness/codegen_stack_byte_step_test.c
+    ${CODEGEN_TEST_CORE_SOURCES}
+    "${RECOMP_SRC}/rom_parser.c"
+    "${RECOMP_SRC}/game_config.c"
+    "${RECOMP_SRC}/toml.c"
+)
+genesisrecomp_configure_test(codegen_stack_byte_step_test)
+target_include_directories(codegen_stack_byte_step_test PRIVATE
+    ${CODEGEN_TEST_CORE_INCLUDE_DIRS}
+)
+add_test(NAME codegen_stack_byte_step
+    COMMAND codegen_stack_byte_step_test "${CMAKE_CURRENT_BINARY_DIR}")
+if(MSVC)
+    # tomlc99 is vendored; same scoped warnings as recompiler/CMakeLists.txt.
+    set_property(SOURCE "${RECOMP_SRC}/toml.c" APPEND PROPERTY COMPILE_OPTIONS
+        /wd4244 /wd4267)
+endif()

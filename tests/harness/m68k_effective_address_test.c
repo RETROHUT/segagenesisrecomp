@@ -32,6 +32,15 @@ int main(void)
     CHECK(0x00FF000Au + m68k_brief_index_value(0x3800u, 0x0000E040u, 0),
           0x00FFE04Au, "Puyo score effective address");
 
+    /* (An)+ / -(An) step: a byte access through A7 moves it by 2 to keep the
+     * stack word-aligned; every other access moves by its size. */
+    CHECK(m68k_an_step_bytes(7, 1), 2, "A7 byte step");
+    CHECK(m68k_an_step_bytes(7, 2), 2, "A7 word step");
+    CHECK(m68k_an_step_bytes(7, 4), 4, "A7 long step");
+    CHECK(m68k_an_step_bytes(0, 1), 1, "A0 byte step");
+    CHECK(m68k_an_step_bytes(6, 1), 1, "A6 byte step");
+    CHECK(m68k_an_step_bytes(6, 4), 4, "A6 long step");
+
     if (failures) {
         fprintf(stderr, "m68k_effective_address_test: %d failure(s)\n", failures);
         return 1;
