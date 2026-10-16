@@ -41,6 +41,15 @@ else()
 endif()
 add_test(NAME frame_pacer COMMAND frame_pacer_test)
 
+add_executable(display_width_test runtime/display_width_test.c)
+target_include_directories(display_width_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../runner")
+if(MSVC)
+    target_compile_options(display_width_test PRIVATE /UNDEBUG)
+else()
+    target_compile_options(display_width_test PRIVATE -UNDEBUG)
+endif()
+add_test(NAME display_width COMMAND display_width_test)
+
 find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME generated_input_paths COMMAND "${Python3_EXECUTABLE}"
