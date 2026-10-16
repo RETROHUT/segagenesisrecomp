@@ -144,8 +144,9 @@ void     gvdp_write_control(GVDP *v, uint16_t value);
 uint16_t gvdp_read_data    (GVDP *v);
 uint16_t gvdp_read_control (GVDP *v);          /* status register             */
 
-/* H/V counter read ($C00008). */
-uint16_t gvdp_read_hv_counter(const GVDP *v);
+/* H/V counter read ($C00008). `line_cycle` is the reader's master-cycle
+ * position in the current scanline (hv_counter.h). */
+uint16_t gvdp_read_hv_counter(const GVDP *v, uint32_t line_cycle);
 
 /* Side-effect-free views of the two stateful ports, for HOST inspection
  * (debuggers, scripts, rollback digests) only — never for emulated 68K

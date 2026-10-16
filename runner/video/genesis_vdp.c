@@ -12,6 +12,7 @@
  * chapter, Charles MacDonald's "genvdp.txt" hardware notes, and VDP test ROMs.
  */
 #include "genesis_vdp.h"
+#include "hv_counter.h"
 #include <string.h>
 #ifndef GENESIS_BATCHED_PLANES
 #define GENESIS_BATCHED_PLANES 0
@@ -437,11 +438,12 @@ uint16_t gvdp_read_control(GVDP *v)
     return s;
 }
 
-uint16_t gvdp_read_hv_counter(const GVDP *v)
+uint16_t gvdp_read_hv_counter(const GVDP *v, uint32_t line_cycle)
 {
-    /* Approximate: V counter in the high byte, H counter low. Refined during
-     * raster-timing validation. */
-    return (uint16_t)(((v->scanline & 0xFF) << 8) | (v->in_hblank ? 0x00 : 0x80));
+    /* V counter in the high byte (the current scanline, approximate), H
+     * counter low. */
+    return (uint16_t)(((v->scanline & 0xFF) << 8) |
+                      vdp_h_counter(line_cycle, gvdp_screen_width(v) == 320));
 }
 
 /* ---- Per-scanline timing -------------------------------------------------- */

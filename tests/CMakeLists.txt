@@ -59,6 +59,15 @@ else()
 endif()
 add_test(NAME ym_timers COMMAND ym_timers_test)
 
+add_executable(hv_counter_test runtime/hv_counter_test.c)
+target_include_directories(hv_counter_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../runner")
+if(MSVC)
+    target_compile_options(hv_counter_test PRIVATE /UNDEBUG)
+else()
+    target_compile_options(hv_counter_test PRIVATE -UNDEBUG)
+endif()
+add_test(NAME hv_counter COMMAND hv_counter_test)
+
 find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME generated_input_paths COMMAND "${Python3_EXECUTABLE}"
