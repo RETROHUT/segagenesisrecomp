@@ -38,6 +38,15 @@ static inline uint32_t m68k_brief_index_value(uint16_t extension,
         : (uint32_t)(int32_t)(int16_t)value;
 }
 
+/* How far (An)+ and -(An) move An for an access of `size_bytes`. A byte
+ * access through A7 moves it by 2, so the stack stays word-aligned. The
+ * Tier-3 interpreter uses this; the code generator applies the same rule
+ * when it emits the step (an_step_bytes in code_generator.c). */
+static inline int m68k_an_step_bytes(int reg, int size_bytes)
+{
+    return (reg == 7 && size_bytes == 1) ? 2 : size_bytes;
+}
+
 /* Widescreen (16:9) margin in extra pixels per side, set by the runner's
  * per-frame gate (0 = authentic 4:3). The recompiler's [[widescreen_site]]
  * injection reads this in the generated C to widen object-cull / tile-load /

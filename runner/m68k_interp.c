@@ -148,13 +148,13 @@ static void mem_write(M68KSize sz, uint32_t a, uint32_t v) {
 }
 
 static uint32_t read_ea_ex(const M68KInstr *ins, int ea, M68KSize sz, ExtR *er, int rmw) {
-    int mode = (ea >> 3) & 7, reg = ea & 7, sb = szbytes(sz);
+    int mode = (ea >> 3) & 7, reg = ea & 7, step = m68k_an_step_bytes(reg, szbytes(sz));
     switch (mode) {
     case 0: return g_cpu.D[reg];
     case 1: return g_cpu.A[reg];
     case 2: return mem_read(sz, g_cpu.A[reg]);
-    case 3: { uint32_t v = mem_read(sz, g_cpu.A[reg]); if (!rmw) g_cpu.A[reg] += sb; return v; }
-    case 4: { g_cpu.A[reg] -= sb; return mem_read(sz, g_cpu.A[reg]); }
+    case 3: { uint32_t v = mem_read(sz, g_cpu.A[reg]); if (!rmw) g_cpu.A[reg] += step; return v; }
+    case 4: { g_cpu.A[reg] -= step; return mem_read(sz, g_cpu.A[reg]); }
     case 5: { int16_t d16 = (int16_t)er_next(er);
               return mem_read(sz, (uint32_t)(g_cpu.A[reg] + (int32_t)d16)); }
     case 6: { uint16_t ext = er_next(er);
@@ -208,14 +208,14 @@ static uint32_t addr_ea(const M68KInstr *ins, int ea, ExtR *er) {
 }
 
 static void write_ea_ex(const M68KInstr *ins, int ea, M68KSize sz, ExtR *er, uint32_t val, int rmw) {
-    int mode = (ea >> 3) & 7, reg = ea & 7, sb = szbytes(sz);
+    int mode = (ea >> 3) & 7, reg = ea & 7, step = m68k_an_step_bytes(reg, szbytes(sz));
     (void)ins;
     switch (mode) {
     case 0: store_dn(reg, val, sz); break;
     case 1: s_illegal_ea = 1; break;          /* An is never a legal write_ea target */
     case 2: mem_write(sz, g_cpu.A[reg], val); break;
-    case 3: mem_write(sz, g_cpu.A[reg], val); g_cpu.A[reg] += sb; break;
-    case 4: if (!rmw) g_cpu.A[reg] -= sb; mem_write(sz, g_cpu.A[reg], val); break;
+    case 3: mem_write(sz, g_cpu.A[reg], val); g_cpu.A[reg] += step; break;
+    case 4: if (!rmw) g_cpu.A[reg] -= step; mem_write(sz, g_cpu.A[reg], val); break;
     case 5: { int16_t d16 = (int16_t)er_next(er);
               mem_write(sz, (uint32_t)(g_cpu.A[reg] + (int32_t)d16), val); break; }
     case 6: { uint16_t ext = er_next(er);
@@ -466,8 +466,8 @@ static void do_addx_subx(const M68KInstr *ins, M68KSize sz, int is_add) {
     uint32_t m = szmask(sz), sign = (uint32_t)(1u << (bits - 1));
     uint32_t a, b;
     if (ins->predec_mem_form) {
-        int ay_dec = (src == 7 && sz == M68K_SIZE_B) ? 2 : sb;
-        int ax_dec = (dst == 7 && sz == M68K_SIZE_B) ? 2 : sb;
+        int ay_dec = m68k_an_step_bytes(src, sb);
+        int ax_dec = m68k_an_step_bytes(dst, sb);
         g_cpu.A[src] -= ay_dec; b = mem_read(sz, g_cpu.A[src]) & m;
         g_cpu.A[dst] -= ax_dec; a = mem_read(sz, g_cpu.A[dst]) & m;
     } else { a = g_cpu.D[dst] & m; b = g_cpu.D[src] & m; }
@@ -509,7 +509,7 @@ static void do_bcd(const M68KInstr *ins, int op) {
     }
     int dst = ins->reg, src = ins->src_ea & 7;
     if (ins->predec_mem_form) {
-        int ay_dec = (src == 7) ? 2 : 1, ax_dec = (dst == 7) ? 2 : 1;
+        int ay_dec = m68k_an_step_bytes(src, 1), ax_dec = m68k_an_step_bytes(dst, 1);
         g_cpu.A[src] -= ay_dec; b = (uint8_t)m68k_read8(g_cpu.A[src]);
         g_cpu.A[dst] -= ax_dec; a = (uint8_t)m68k_read8(g_cpu.A[dst]);
         a_addr = g_cpu.A[dst]; to_mem = 1;
@@ -779,8 +779,8 @@ static M68kiStatus exec_one(const M68KInstr *ins, uint32_t *next_pc) {
     case MN_CMPM: {
         /* CMPM (Ay)+,(Ax)+ : Ax is dest (ins->reg), Ay is src (src_ea&7). */
         int ay = ins->src_ea & 7, ax = ins->reg, sb = szbytes(sz); uint32_t m = szmask(sz);
-        uint32_t b = mem_read(sz, g_cpu.A[ay]) & m; g_cpu.A[ay] += sb;
-        uint32_t a = mem_read(sz, g_cpu.A[ax]) & m; g_cpu.A[ax] += sb;
+        uint32_t b = mem_read(sz, g_cpu.A[ay]) & m; g_cpu.A[ay] += m68k_an_step_bytes(ay, sb);
+        uint32_t a = mem_read(sz, g_cpu.A[ax]) & m; g_cpu.A[ax] += m68k_an_step_bytes(ax, sb);
         flags_cmp(a, b, a - b, sz);
         return M68KI_OK;
     }
