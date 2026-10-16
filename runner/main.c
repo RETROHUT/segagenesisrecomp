@@ -1087,6 +1087,85 @@ static const char *resolve_runner_path(const char *path, char *buf, size_t buf_l
 static const char OWN_SAVE_MAGIC[8] = "GROWNS2\0";
 #include "host_state.h"
 
+/* Session exec trailer (RETROHUT#44). A GROWNS2 load restores the guest but
+ * not the native call stack of the game fiber, so it is only correct when the
+ * game names a resume PC to restart the fiber at. A game without one (NHL 96
+ * has no pattern-detected WaitForVBla; its fiber parks mid-function on the
+ * cycle budget) would continue whatever code was running at load time over
+ * the restored RAM. For such games the file also carries a whole-machine
+ * rollback snapshot (rb_state.h: exec = live fiber stack + registers), and a
+ * load restores that instead. Its exec section holds host addresses, so it is
+ * valid only in the process that wrote it; the session id rejects the rest.
+ * Layout after the GROWNS2 payload: blob, then the fixed footer. */
+static const char EXEC_TRAILER_MAGIC[8] = "GREXEC1\0";
+typedef struct ExecTrailerFooter {
+    uint64_t session;
+    uint32_t blob_len;
+    char     magic[8];
+} ExecTrailerFooter;
+
+static int game_has_resume_pc(void)
+{
+    return g_game_spec.resume_main_loop_pc || g_game_spec.save_resume_pc;
+}
+
+static uint64_t exec_session_id(void)
+{
+    static uint64_t id;
+    if (!id)
+        id = (SDL_GetPerformanceCounter() ^ ((uint64_t)time(NULL) << 32)) | 1u;
+    return id;
+}
+
+static int exec_trailer_write(FILE *sf)
+{
+    size_t cap = genesis_rb_bound();
+    uint8_t *blob = (uint8_t *)malloc(cap);
+    if (!blob) return 0;
+    size_t n = genesis_rb_save(blob, cap);
+    ExecTrailerFooter ft;
+    memset(&ft, 0, sizeof ft);
+    ft.session = exec_session_id();
+    ft.blob_len = (uint32_t)n;
+    memcpy(ft.magic, EXEC_TRAILER_MAGIC, sizeof ft.magic);
+    int ok = n && fwrite(blob, 1, n, sf) == n &&
+             fwrite(&ft, sizeof ft, 1, sf) == 1;
+    free(blob);
+    return ok;
+}
+
+/* 1 loaded, 0 rejected (machine untouched). */
+static int exec_trailer_load(FILE *sf, const char *resolved)
+{
+    ExecTrailerFooter ft;
+    long size;
+    if (fseek(sf, 0, SEEK_END) || (size = ftell(sf)) < (long)sizeof ft ||
+        fseek(sf, size - (long)sizeof ft, SEEK_SET) ||
+        fread(&ft, sizeof ft, 1, sf) != 1 ||
+        memcmp(ft.magic, EXEC_TRAILER_MAGIC, sizeof ft.magic) ||
+        !ft.blob_len || (long)ft.blob_len > size - (long)sizeof ft) {
+        fprintf(stderr, "[LOAD] %s has no resumable snapshot (written by an older build?)\n",
+                resolved);
+        host_state_notice("Load rejected: save is from an older build");
+        return 0;
+    }
+    if (ft.session != exec_session_id()) {
+        fprintf(stderr, "[LOAD] %s was saved in an earlier session; %s can only load "
+                "states saved since it started\n", resolved, g_game_spec.short_name);
+        host_state_notice("Load rejected: save is from an earlier session");
+        return 0;
+    }
+    uint8_t *blob = (uint8_t *)malloc(ft.blob_len);
+    int ok = blob &&
+             !fseek(sf, size - (long)sizeof ft - (long)ft.blob_len, SEEK_SET) &&
+             fread(blob, 1, ft.blob_len, sf) == ft.blob_len &&
+             genesis_rb_load(blob, ft.blob_len);
+    free(blob);
+    if (!ok)
+        fprintf(stderr, "[LOAD] %s: snapshot failed to restore\n", resolved);
+    return ok;
+}
+
 int runner_save_state_file(const char *path)
 {
     const char *reason=g_game_spec.state_unavailable_reason?g_game_spec.state_unavailable_reason():NULL;
@@ -1107,6 +1186,7 @@ int runner_save_state_file(const char *path)
     ok = ok && machine_save_state(sf);
     ok = ok && ym2612_save_state(sf);
     ok = ok && psg_save_state(sf);
+    ok = ok && (game_has_resume_pc() || exec_trailer_write(sf));
     ok = ok && !ferror(sf);
     fclose(sf);
 
@@ -1144,6 +1224,18 @@ int runner_load_state_file(const char *path)
         fprintf(stderr, "[LOAD] %s is not an own-backend save (old format?)\n", resolved);
         fclose(sf);
         return 0;
+    }
+
+    if (!game_has_resume_pc()) {
+        int ok = exec_trailer_load(sf, resolved);
+        fclose(sf);
+        if (ok) {
+            fprintf(stderr, "[LOAD] loaded %s\n", resolved);
+            genesis_local_states_clear();
+            if (g_game_spec.on_state_loaded) g_game_spec.on_state_loaded();
+            audio_discard_playback();
+        }
+        return ok;
     }
 
     extern uint8_t g_ram[0x010000];
