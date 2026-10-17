@@ -399,11 +399,19 @@ void cosim_init(void) {
     const char *esf = getenv("GENESIS_COSIM_START_FRAME");
     s_start_frame = (esf && *esf) ? strtoull(esf, 0, 10) : 0;
 
+    /* INSN mode: optionally free-run to cycle N before checkpointing, to step
+     * a known window at a fine stride without parking on everything before it.
+     * The first checkpoint is the first stride multiple past N. */
+    const char *esc = getenv("GENESIS_COSIM_START_CYCLE");
+    uint64_t start_cycle = (esc && *esc) ? strtoull(esc, 0, 10) : 0;
+
     g_cosim_cycle = 0;
     s_frame_ctr = 0;
     /* In FRAME mode, disarm the per-instruction hook (macro compare never
      * fires); the frame boundary drives checkpoints instead. */
-    g_cosim_next_cp = (s_clock == COSIM_CLK_INSN) ? s_stride : UINT64_MAX;
+    g_cosim_next_cp = (s_clock == COSIM_CLK_INSN)
+                    ? start_cycle - (start_cycle % s_stride) + s_stride
+                    : UINT64_MAX;
 
 #ifdef _WIN32
     WSADATA wsa; WSAStartup(MAKEWORD(2,2), &wsa);

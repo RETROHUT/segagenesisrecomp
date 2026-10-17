@@ -140,6 +140,15 @@ typedef struct GameSpec {
     void      (*call_vblank)(void);
     void      (*call_hblank)(void);
 
+    /* Where GENESIS_FORCE_INTERP starts interpreting the V-int, for a game
+     * whose call_vblank doesn't simply run the level-6 vector (e.g. a vector
+     * that is a pushed-address trampoline, which call_vblank resolves and
+     * skips). Returns the handler address call_vblank would dispatch to, or
+     * 0 for no handler. NULL = interpret from the vector, as before. Keeps
+     * the interpreter on the same instructions and cycle count as the
+     * recompiled handler, which recomp-vs-interpreter co-simulation needs. */
+    uint32_t  (*interp_vblank_pc)(void);
+
     /* Save-state resume loop PC. Native save-state loads restart the
      * host game fiber here after restoring RAM/CPU state, because the
      * host C stack itself is not portable save-state data. This should
