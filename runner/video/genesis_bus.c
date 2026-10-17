@@ -7,6 +7,7 @@
  * genesis_machine.c).
  */
 #include "genesis_bus.h"
+#include "hv_counter.h"
 #include "../audio/event_queue.h"
 #include <string.h>
 
@@ -265,7 +266,7 @@ uint16_t gbus_read16(GenesisBus *b, uint32_t a)
     if (a >= 0xC00000u && a < 0xC00010u) {                          /* VDP      */
         if (a < 0xC00004u) return gvdp_read_data(b->vdp);
         if (a < 0xC00008u) return gvdp_read_control(b->vdp);
-        return gvdp_read_hv_counter(b->vdp);
+        return gvdp_read_hv_counter(b->vdp, STAMP_68K() % VDP_LINE_MASTER_CYCLES);
     }
     if (a >= 0xA00000u && a < 0xA10000u) {                          /* Z80/FM   */
         if ((a & 0xFFFFu) < 0x2000u) {
@@ -313,7 +314,7 @@ uint16_t gbus_peek16(const GenesisBus *b, uint32_t a)
     if (a >= 0xC00000u && a < 0xC00010u) {
         if (a < 0xC00004u) return gvdp_peek_data(b->vdp);
         if (a < 0xC00008u) return gvdp_peek_status(b->vdp);
-        return gvdp_read_hv_counter(b->vdp);
+        return gvdp_read_hv_counter(b->vdp, STAMP_68K() % VDP_LINE_MASTER_CYCLES);
     }
     if (a >= 0xA00000u && a < 0xA10000u) {
         if ((a & 0xFFFFu) < 0x2000u) {
