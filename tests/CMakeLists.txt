@@ -253,6 +253,26 @@ target_include_directories(m68k_effective_address_test PRIVATE
 )
 
 # ---------------------------------------------------------------------------
+# m68k_interp_handler_test — where an interpreted interrupt handler ends,
+# including a vector that pushes the handler address and RTSes to it.
+# ---------------------------------------------------------------------------
+add_executable(m68k_interp_handler_test
+    harness/m68k_interp_handler_test.c
+    "${CMAKE_CURRENT_LIST_DIR}/../runner/m68k_interp.c"
+    ${GENESISRECOMP_DECODER_SOURCES}
+)
+genesisrecomp_register_test(m68k_interp_handler_test)
+if(MSVC)
+    target_compile_options(m68k_interp_handler_test PRIVATE /UNDEBUG)
+else()
+    target_compile_options(m68k_interp_handler_test PRIVATE -UNDEBUG)
+endif()
+target_include_directories(m68k_interp_handler_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../runner"
+    "${CMAKE_CURRENT_LIST_DIR}/../runner/include"
+)
+
+# ---------------------------------------------------------------------------
 # codegen_stack_byte_step_test — byte-sized -(A7)/(A7)+ step A7 by 2 in the
 # generated C (the 68000 keeps the stack word-aligned); other An step by 1.
 # ---------------------------------------------------------------------------

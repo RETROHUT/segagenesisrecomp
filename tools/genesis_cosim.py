@@ -81,7 +81,7 @@ def find_oracle_exe(explicit): # clownmdemu oracle cosim (pairing #2 B-side)
 class Inst:
     """One cosim process + its control socket."""
     def __init__(self, name, exe, port, backend, stride, clock, extra_env=None,
-                 waitvbl_pc="", visible=False):
+                 waitvbl_pc="", visible=False, extra_args=()):
         self.name = name
         exe_dir = os.path.dirname(exe)
         rom = os.path.join(exe_dir, GAMES[GAME]["rom"])   # per-game read-only ROM
@@ -115,7 +115,7 @@ class Inst:
             env.update(extra_env)
         self.log = open(os.path.join(cwd, f"cosim_{name}.log"), "w")
         self.proc = subprocess.Popen(
-            [exe, rom, "--no-launcher", "--turbo"],
+            [exe, rom, "--no-launcher", "--turbo", *extra_args],
             cwd=cwd, env=env, stdout=self.log, stderr=subprocess.STDOUT)
         self.sock = self._connect(port)
         self.buf = b""
@@ -172,12 +172,29 @@ class Inst:
             d.setdefault(t[i], t[i+1])
         return d
 
+    def exited_cleanly(self, timeout=30):
+        """After the connection closed: did the process end with exit code 0
+        (an input script's EXIT 0)?"""
+        try:
+            return self.proc.wait(timeout=timeout) == 0
+        except subprocess.TimeoutExpired:
+            return False
+
     def close(self):
         try: self.sock.close()
         except Exception: pass
         try: self.proc.terminate()
         except Exception: pass
         self.log.close()
+
+
+def step_or_none(inst):
+    """One checkpoint step; None if the instance has closed (an input
+    script's EXIT, or a crash)."""
+    try:
+        return inst.kv(inst.cmd("step 1"))
+    except (EOFError, ConnectionError):
+        return None
 
 
 def report_divergence(a, b, cp):
@@ -188,6 +205,14 @@ def report_divergence(a, b, cp):
         va, vb = sa.get(k, "?"), sb.get(k, "?")
         mark = "  <-- SPLIT" if va != vb else ""
         print(f"  {k:<10} {va:>18}  {vb:>18}{mark}")
+    for k, fields in (("timing", "timingfields"), ("vdp", "vdpfields")):
+        if sa.get(k) != sb.get(k):
+            ra = a.cmd(fields)
+            fa, fb = a.kv(ra), b.kv(b.cmd(fields))
+            print(f"\n  --- {fields} diff (A vs B) ---")
+            for f in ra.split()[0::2]:
+                if fa.get(f) != fb.get(f):
+                    print(f"    {f:<14} {fa.get(f)}  vs  {fb.get(f)}")
     ca, cb = a.kv(a.cmd("cpu")), b.kv(b.cmd("cpu"))
     print("\n  --- 68K register diff (A vs B) ---")
     for k in ["pc","sr","usp"] + [f"d{i}" for i in range(8)] + [f"a{i}" for i in range(8)]:
@@ -291,6 +316,11 @@ def main():
                          "68K CYCLE-COST axis both own-backend backends bump identically "
                          "(psxrecomp-style guest cycle counter). 'cycle' is an alias for 'insn'.")
     ap.add_argument("--max", type=int, default=2000, help="max checkpoints to compare")
+    ap.add_argument("--input-script",
+                    help="replay this runner input script on both instances; a scripted "
+                         "EXIT 0 on both, at the same checkpoint, ends the run as a pass")
+    ap.add_argument("--start-cycle", type=int, default=0,
+                    help="cycle clock: free-run to this cycle before the first checkpoint")
     ap.add_argument("--inject-at", type=int, default=0, help="apply injection at cp K (gate 3)")
     ap.add_argument("--inject", default="", help="reg:IDX:XOR or ram:OFF:XOR")
     ap.add_argument("--waitvbl-pc", default="",
@@ -332,10 +362,16 @@ def main():
           f"clock={args.clock} stride={args.stride} max={args.max}"
           + ("  [pairing #2: visible surface]" if pairing2 else ""))
 
+    start_env = ({"GENESIS_COSIM_START_CYCLE": str(args.start_cycle)}
+                 if args.start_cycle else None)
+    script_args = (("--input-script", os.path.abspath(args.input_script))
+                   if args.input_script else ())
     a = Inst("a", exe_for(args.a), args.porta, args.a, args.stride, args.clock,
-             waitvbl_pc=args.waitvbl_pc, visible=vis_a)
+             extra_env=start_env, waitvbl_pc=args.waitvbl_pc, visible=vis_a,
+             extra_args=script_args)
     b = Inst("b", exe_for(args.b), args.portb, args.b, args.stride, args.clock,
-             waitvbl_pc=args.waitvbl_pc, visible=vis_b)
+             extra_env=start_env, waitvbl_pc=args.waitvbl_pc, visible=vis_b,
+             extra_args=script_args)
 
     def do_inject(inst):
         kind, idx, xor = args.inject.split(":")
@@ -357,8 +393,17 @@ def main():
             if args.inject_at and cp == args.inject_at and args.inject:
                 do_inject(a)  # perturb A only
                 print(f"[gate3] injected {args.inject} into A at cp={cp}")
-            ra = a.kv(a.cmd("step 1"))
-            rb = b.kv(b.cmd("step 1"))
+            ra, rb = step_or_none(a), step_or_none(b)
+            if ra is None or rb is None:
+                # An instance closed: with an input script, its EXIT. Both
+                # must end at the same checkpoint, cleanly.
+                if ra is None and rb is None and a.exited_cleanly() and b.exited_cleanly():
+                    print(f"\nOK — script ended after {cp} checkpoints, ZERO divergence.")
+                    return 0
+                ended = [i.name for i, r in ((a, ra), (b, rb)) if r is None]
+                print(f"\n*** instance(s) {','.join(ended).upper()} ended at cp={cp + 1}, "
+                      f"the other did not (or exit code != 0) ***")
+                return 1
             cp += 1
             if subs:
                 # Compare a chosen subset of sub-hashes (pairing #1: the cross-

@@ -76,8 +76,16 @@ M68kiStatus m68k_interp_run_ram_handler(uint32_t entry_pc, uint32_t *out_exit_pc
  */
 M68kiStatus m68k_interp_step(void);
 
-/* Interpret an interrupt HANDLER BODY from its autovector entry, stopping at the
- * handler's own depth-0 RTE (peeked, not executed). In FORCE_INTERP mode this
+/* Non-zero when the last m68k_interp_step was the taken loop-back of a
+ * `TST <mem>; Bcc <the TST>` flag poll, where generated code yields to the
+ * scheduler (glue_yield_for_interrupt_poll). The whole-program driver
+ * yields there too. */
+int m68k_interp_step_polled(void);
+
+/* Interpret an interrupt HANDLER BODY from its entry, ending at the handler's
+ * own depth-0 RTE, which pops SR and PC and is charged as generated code's RTE
+ * is (the caller restores the interrupted CPU state). An RTS at depth 0 is a
+ * computed jump (a trampoline vector), not the end. In FORCE_INTERP mode this
  * is the interpreted twin of g_game_spec.call_vblank()/call_hblank(). */
 M68kiStatus m68k_interp_run_handler(uint32_t entry_pc);
 

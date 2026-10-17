@@ -1267,19 +1267,8 @@ static int interp_estimate_cycles(const M68KInstr *instr) {
     }
 }
 
-/* The emit_cycle_accounting() tail, executed after one interpreted instruction. */
-static void interp_account_cycles(const M68KInstr *ins) {
-    int cyc = -1;
-#ifdef GENESIS_COSIM
-    /* Charge the SAME clown-measured cost the recompiled code was stamped with,
-     * so g_audio_cycle_counter converges with the recomp instead of drifting on
-     * a PRM estimate. Falls back to the estimate for addresses not in the table
-     * (RAM-resident code). Gated to the cosim build for now — enabling it in the
-     * shipping floor is a validated pacing change (see game_cycles.h). */
-    cyc = game_insn_cost(ins->addr);
-#endif
-    if (cyc < 0) cyc = interp_estimate_cycles(ins);
-    if (cyc < 0) cyc = 4;                          /* never stall the clock */
+/* The emit_cycle_accounting() tail: charge one instruction's cycles. */
+static void interp_charge(int cyc) {
     g_native_insn_count++;
     g_cycle_accumulator   += (uint32_t)cyc;
     g_audio_cycle_counter += (uint32_t)cyc;
@@ -1292,15 +1281,131 @@ static void interp_account_cycles(const M68KInstr *ins) {
     GEN_COSIM_TICK(cyc);
 }
 
+/* Call costs, charged in the generated code's order (cosim build).
+ *
+ * Generated code charges RTS before it returns, but JSR/BSR only after the
+ * callee has returned to the call site (or unwound through it). Charging a
+ * call up front, as an instruction tail, puts the interpreter one call cost
+ * ahead on the cycle axis for the whole callee, so a cycle-clock checkpoint
+ * inside any call catches the two backends at different instructions
+ * (RETROHUT#14). So the cosim build defers each call's cost with the stack
+ * slot its return address went to, and charges it once a return lifts A7
+ * above that slot: an RTS/RTR/RTE, or a game hook's implicit RTS. Several
+ * frames unwound at once (a skip-return) are charged innermost first, as the
+ * generated code's unwind does. A capsule (an interrupt handler, a floor
+ * run) only settles calls it made itself: a handler runs on its own stack,
+ * which can sit above the interrupted code's frames. On exit it drops what
+ * it deferred and never returned through, so nothing leaks into the
+ * caller's accounting. The shipping floor keeps charging calls up front. */
+#ifdef GENESIS_COSIM
+#define INTERP_MAX_DEFERRED_CALLS 256
+static struct { uint32_t slot; int cyc; } s_calls[INTERP_MAX_DEFERRED_CALLS];
+static int s_call_count = 0;
+static int s_call_base = 0;      /* first entry the running capsule owns */
+#endif
+
+static void interp_settle_calls(void) {
+#ifdef GENESIS_COSIM
+    while (s_call_count > s_call_base && s_calls[s_call_count - 1].slot < g_cpu.A[7])
+        interp_charge(s_calls[--s_call_count].cyc);
+#endif
+}
+
+/* Capsule entry: the capsule owns entries from here on. Returns the outer
+ * base, for interp_calls_drop. */
+static int interp_calls_mark(void) {
+#ifdef GENESIS_COSIM
+    int outer = s_call_base;
+    s_call_base = s_call_count;
+    return outer;
+#else
+    return 0;
+#endif
+}
+
+/* Capsule exit: drop the capsule's unsettled entries, restore the outer base. */
+static void interp_calls_drop(int outer) {
+#ifdef GENESIS_COSIM
+    s_call_count = s_call_base;
+    s_call_base = outer;
+#else
+    (void)outer;
+#endif
+}
+
+/* After one interpreted instruction. */
+static void interp_account_cycles(const M68KInstr *ins) {
+    int cyc = -1;
+#ifdef GENESIS_COSIM
+    /* Charge the SAME clown-measured cost the recompiled code was stamped with,
+     * so g_audio_cycle_counter converges with the recomp instead of drifting on
+     * a PRM estimate. Falls back to the estimate for addresses not in the table
+     * (RAM-resident code). Gated to the cosim build for now — enabling it in the
+     * shipping floor is a validated pacing change (see game_cycles.h). */
+    cyc = game_insn_cost(ins->addr);
+#endif
+    if (cyc < 0) cyc = interp_estimate_cycles(ins);
+    if (cyc < 0) cyc = 4;                          /* never stall the clock */
+#ifdef GENESIS_COSIM
+    if (ins->mnemonic == MN_JSR || ins->mnemonic == MN_BSR) {
+        if (s_call_count < INTERP_MAX_DEFERRED_CALLS) {
+            s_calls[s_call_count].slot = g_cpu.A[7];
+            s_calls[s_call_count++].cyc = cyc;
+            return;
+        }
+        /* Deeper than the table: charged up front, which will show as a
+         * cycle-clock divergence inside this call. Say why, once. */
+        static int s_warned = 0;
+        if (!s_warned) {
+            s_warned = 1;
+            fprintf(stderr, "[COSIM] more than %d nested calls at $%06X: call "
+                    "costs no longer deferred\n", INTERP_MAX_DEFERRED_CALLS,
+                    (unsigned)ins->addr);
+        }
+    }
+    if (ins->mnemonic == MN_RTS) {
+        /* Generated code charges RTS before its C return, and the caller pops
+         * the return address after the call: a checkpoint on this tick sees
+         * the address still on the stack. */
+        g_cpu.A[7] -= 4;
+        interp_charge(cyc);
+        g_cpu.A[7] += 4;
+        interp_settle_calls();
+        return;
+    }
+#endif
+    interp_charge(cyc);
+    if (ins->mnemonic == MN_RTS || ins->mnemonic == MN_RTR || ins->mnemonic == MN_RTE)
+        interp_settle_calls();
+}
+
 /* =========================================================================
  * Public entries.
  * ========================================================================= */
 
+/* Set by m68k_interp_step when the step was the taken loop-back of a
+ * hardware-flag poll: `TST <mem>` immediately followed by a Bcc back to it.
+ * Generated code yields to the scheduler there (code_generator.c's
+ * "Wait for IRQ-cleared flag" idiom, glue_yield_for_interrupt_poll), so a
+ * whole-program interpreter driver must too, or its raster falls behind the
+ * recompiled code's on every pass of such a loop (RETROHUT#14). */
+static int s_step_polled = 0;
+int m68k_interp_step_polled(void) { return s_step_polled; }
+
+static int interp_is_poll_loopback(const M68KInstr *ins) {
+    M68KInstr tst;
+    return ins->mnemonic == MN_Bcc && ins->has_target &&
+           (g_cpu.PC & 0xFFFFFFu) == (ins->target_addr & 0xFFFFFFu) &&
+           m68k_decode(busview(), ins->target_addr & 0xFFFFFFu, &tst) &&
+           tst.mnemonic == MN_TST && tst.addr + tst.byte_length == ins->addr;
+}
+
 /* Execute one instruction at g_cpu.PC; advance g_cpu.PC. */
 M68kiStatus m68k_interp_step(void) {
+    s_step_polled = 0;
     uint32_t pc = g_cpu.PC & 0xFFFFFFu;
     if (!pc_fetchable(pc)) { g_m68ki_bad_pc = pc; return M68KI_HALT_BADADDR; }
-    if (interp_game_hook(pc)) { g_cpu.PC = pop32() & 0xFFFFFFu; return M68KI_OK; }
+    if (interp_game_hook(pc)) { g_cpu.PC = pop32() & 0xFFFFFFu; interp_settle_calls(); return M68KI_OK; }
 
     M68KInstr ins;
     if (!m68k_decode(busview(), pc, &ins)) {
@@ -1321,11 +1426,12 @@ M68kiStatus m68k_interp_step(void) {
      * handler fire / the game fiber yield between interpreted instructions,
      * exactly as it would between statically-recompiled ones. */
     interp_account_cycles(&ins);
+    s_step_polled = interp_is_poll_loopback(&ins);
     return M68KI_OK;
 }
 
 /* Run until PC == stop_pc (or halt). */
-M68kiStatus m68k_interp_run(uint32_t entry_pc, uint32_t stop_pc) {
+static M68kiStatus m68k_interp_run_body(uint32_t entry_pc, uint32_t stop_pc) {
     g_cpu.PC = entry_pc & 0xFFFFFFu;
     g_m68ki_insn_count = 0;
     g_m68ki_discover_count = 0;
@@ -1371,7 +1477,7 @@ M68kiStatus m68k_interp_run(uint32_t entry_pc, uint32_t stop_pc) {
  * dispatch frame — if one shows up the loop will run past it and surface as a
  * halt/guard rather than a silent mis-return.
  * ------------------------------------------------------------------------- */
-M68kiStatus m68k_interp_run_framed(uint32_t entry_pc, uint32_t *out_exit_pc) {
+static M68kiStatus m68k_interp_run_framed_body(uint32_t entry_pc, uint32_t *out_exit_pc) {
     g_cpu.PC = entry_pc & 0xFFFFFFu;
     g_m68ki_insn_count = 0;
     g_m68ki_discover_count = 0;
@@ -1388,6 +1494,7 @@ M68kiStatus m68k_interp_run_framed(uint32_t entry_pc, uint32_t *out_exit_pc) {
                 return M68KI_OK;
             }
             g_cpu.PC = pop32() & 0xFFFFFFu;
+            interp_settle_calls();
             depth--;
             continue;
         }
@@ -1445,7 +1552,7 @@ M68kiStatus m68k_interp_run_framed(uint32_t entry_pc, uint32_t *out_exit_pc) {
  * read garbage. Net call depth (JSR/BSR +1, RTS/RTR -1) keeps a nested
  * subroutine's RTE-free returns from ending the run early.
  * ------------------------------------------------------------------------- */
-M68kiStatus m68k_interp_run_handler(uint32_t entry_pc) {
+static M68kiStatus m68k_interp_run_handler_body(uint32_t entry_pc) {
     g_cpu.PC = entry_pc & 0xFFFFFFu;
     g_m68ki_insn_count = 0;
     g_m68ki_discover_count = 0;
@@ -1458,6 +1565,7 @@ M68kiStatus m68k_interp_run_handler(uint32_t entry_pc) {
             /* Implicit RTS; at depth 0 it ends the handler body like RTE. */
             if (depth == 0) return M68KI_OK;
             g_cpu.PC = pop32() & 0xFFFFFFu;
+            interp_settle_calls();
             depth--;
             continue;
         }
@@ -1471,8 +1579,15 @@ M68kiStatus m68k_interp_run_handler(uint32_t entry_pc) {
             return M68KI_HALT_UNIMPL;
         }
 
-        if (depth == 0 && ins.mnemonic == MN_RTE)
-            return M68KI_OK;                 /* handler's own return — stop, don't pop */
+        if (depth == 0 && ins.mnemonic == MN_RTE) {
+            /* The handler's own return, done as generated code does it: pop
+             * SR and PC as stored, charge the RTE, and leave. The scheduler
+             * restores the interrupted CPU state after every handler. */
+            g_cpu.SR = m68k_read16(g_cpu.A[7]); g_cpu.A[7] += 2;
+            g_cpu.PC = m68k_read32(g_cpu.A[7]); g_cpu.A[7] += 4;
+            interp_account_cycles(&ins);
+            return M68KI_OK;
+        }
 
         uint32_t next;
         s_illegal_ea = 0;
@@ -1484,9 +1599,13 @@ M68kiStatus m68k_interp_run_handler(uint32_t entry_pc) {
         }
         g_cpu.PC = next & 0xFFFFFFu;
         interp_account_cycles(&ins);
+        /* An RTS/RTR at depth 0 has no call of the handler's own to return
+         * from: it is a computed jump through a pushed address (a vector that
+         * pushes a RAM handler pointer and RTSes to it). The handler it lands
+         * in is still at depth 0, so its RTE ends the capsule. */
         if (ins.mnemonic == MN_JSR || ins.mnemonic == MN_BSR)
             depth++;
-        else if (ins.mnemonic == MN_RTS || ins.mnemonic == MN_RTR)
+        else if ((ins.mnemonic == MN_RTS || ins.mnemonic == MN_RTR) && depth > 0)
             depth--;
 
         if (++g_m68ki_insn_count > M68KI_INSN_GUARD) {
@@ -1518,7 +1637,7 @@ M68kiStatus m68k_interp_run_handler(uint32_t entry_pc) {
  * Cycle accounting runs per instruction (interp_account_cycles), the same
  * tail the generated code emits.
  * ------------------------------------------------------------------------- */
-M68kiStatus m68k_interp_run_ram_handler(uint32_t entry_pc, uint32_t *out_exit_pc)
+static M68kiStatus m68k_interp_run_ram_handler_body(uint32_t entry_pc, uint32_t *out_exit_pc)
 {
     g_cpu.PC = entry_pc & 0xFFFFFFu;
     g_m68ki_insn_count = 0;
@@ -1536,6 +1655,7 @@ M68kiStatus m68k_interp_run_ram_handler(uint32_t entry_pc, uint32_t *out_exit_pc
                 return M68KI_OK;
             }
             g_cpu.PC = pop32() & 0xFFFFFFu;
+            interp_settle_calls();
             depth--;
             continue;
         }
@@ -1586,4 +1706,33 @@ M68kiStatus m68k_interp_run_ram_handler(uint32_t entry_pc, uint32_t *out_exit_pc
             g_m68ki_bad_pc = g_cpu.PC; return M68KI_HALT_GUARD;
         }
     }
+}
+
+/* Capsule entries: each runs on its own span of deferred call costs. */
+M68kiStatus m68k_interp_run(uint32_t entry_pc, uint32_t stop_pc) {
+    int mark = interp_calls_mark();
+    M68kiStatus st = m68k_interp_run_body(entry_pc, stop_pc);
+    interp_calls_drop(mark);
+    return st;
+}
+
+M68kiStatus m68k_interp_run_framed(uint32_t entry_pc, uint32_t *out_exit_pc) {
+    int mark = interp_calls_mark();
+    M68kiStatus st = m68k_interp_run_framed_body(entry_pc, out_exit_pc);
+    interp_calls_drop(mark);
+    return st;
+}
+
+M68kiStatus m68k_interp_run_handler(uint32_t entry_pc) {
+    int mark = interp_calls_mark();
+    M68kiStatus st = m68k_interp_run_handler_body(entry_pc);
+    interp_calls_drop(mark);
+    return st;
+}
+
+M68kiStatus m68k_interp_run_ram_handler(uint32_t entry_pc, uint32_t *out_exit_pc) {
+    int mark = interp_calls_mark();
+    M68kiStatus st = m68k_interp_run_ram_handler_body(entry_pc, out_exit_pc);
+    interp_calls_drop(mark);
+    return st;
 }

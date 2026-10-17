@@ -577,6 +577,8 @@ static void interp_drive_mainloop(uint32_t entry_pc) {
             continue;
         }
         M68kiStatus st = m68k_interp_step();
+        if (st == M68KI_OK && m68k_interp_step_polled())
+            glue_yield_for_interrupt_poll();
         if (st != M68KI_OK) {
             fprintf(stderr, "[FORCE_INTERP] HALT st=%d at PC=$%06X op=$%04X — parking "
                     "(unimplemented instruction: complete the interpreter)\n",
@@ -857,6 +859,15 @@ static int interleave_irq_on(void) {
 uint32_t g_68k_stamp_rebase = 0;
 extern uint32_t machine_z80_stamp(void);   /* raster cursor, master cycles */
 
+/* GENESIS_FORCE_INTERP's V-int start: the level-6 vector, or the handler the
+ * game's call_vblank dispatches to when it skips a trampoline vector. */
+static uint32_t interp_vint_entry(void)
+{
+    if (g_game_spec.interp_vblank_pc)
+        return g_game_spec.interp_vblank_pc() & 0xFFFFFFu;
+    return m68k_read32(0x78) & 0xFFFFFFu;
+}
+
 static void own_deliver_vint(GVDP *vdp)
 {
     const uint32_t STK = g_game_layout.intr_stack;
@@ -885,7 +896,8 @@ static void own_deliver_vint(GVDP *vdp)
     if (genesis_force_interp()) {
         /* Interpret the V-int handler body from the level-6 autovector; delivery
          * (A7/stack save-restore, stamp rebase, cycle charging) is identical. */
-        m68k_interp_run_handler(m68k_read32(0x78) & 0xFFFFFFu);
+        uint32_t pc = interp_vint_entry();
+        if (pc) m68k_interp_run_handler(pc);
     } else
     if (g_game_spec.call_vblank) g_game_spec.call_vblank();
     s_irq_cycle_debt += g_audio_cycle_counter - cyc_before;
@@ -953,7 +965,8 @@ static void own_run_handler_interleaved(int level, GVDP *vdp)
     uint8_t saved_vb = vdp->in_vblank; vdp->in_vblank = 1;
     g_rte_pending = 0; g_rte_pending_ptr = &s_rte_dummy; g_rte_pending = 0;
     if (genesis_force_interp()) {
-        m68k_interp_run_handler(m68k_read32(level == 6 ? 0x78 : 0x70) & 0xFFFFFFu);
+        uint32_t pc = level == 6 ? interp_vint_entry() : m68k_read32(0x70) & 0xFFFFFFu;
+        if (pc) m68k_interp_run_handler(pc);
     } else
     if (level == 6) { if (g_game_spec.call_vblank) g_game_spec.call_vblank(); }
     else            { if (g_game_spec.call_hblank) g_game_spec.call_hblank(); }

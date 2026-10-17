@@ -95,6 +95,30 @@ pass `--porta/--portb` if a psxrecomp instance is around.
 
 ---
 
+## Recomp vs interpreter: accounting order and script replay
+
+Pairing #1 on the cycle clock needs both backends to reach every cycle value
+at the same instruction, so the cosim build's interpreter charges cycles in
+the generated code's order: a JSR/BSR after the callee returns (deferred
+until a return lifts A7 above its return slot), an RTS before the caller's
+pop. An interrupt handler capsule only settles calls it made itself, and ends
+at its RTE by popping and charging it, as generated code does. The
+whole-program driver (`GENESIS_FORCE_INTERP`) yields on the loop-back of a
+`TST <mem>; Bcc <the TST>` flag poll, where generated code calls
+`glue_yield_for_interrupt_poll()`. A game whose `call_vblank` skips a
+trampoline vector supplies `GameSpec.interp_vblank_pc` so the interpreter
+starts the V-int at the same handler.
+
+Coordinator options:
+- `--input-script PATH` replays a runner input script on both instances; a
+  scripted `EXIT 0` on both, at the same checkpoint, ends the run as a pass.
+- `--start-cycle C` (env `GENESIS_COSIM_START_CYCLE`) free-runs to cycle C
+  before the first cycle-clock checkpoint, to step a known window finely.
+- On a split, the report also lists the differing `timingfields` and
+  `vdpfields`.
+
+RETROHUT registers NHL 96 regression tests built on these (`nhl96_cosim_*`).
+
 ## What it does NOT do yet (READ THIS)
 
 1. ~~**No cross-backend CYCLE alignment vs clownmdemu.**~~ **CLOSED** (2026-07-01,
