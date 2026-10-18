@@ -207,9 +207,11 @@ typedef struct GameSpec {
     void      (*on_hblank)(uint32_t line);
 
     /* ---- CLI args ---- */
-    /* Called once per unrecognized argv pair during startup. Return 1
-     * if the key was consumed (val too if applicable), 0 to let the
-     * runner report it as unknown. NULL = no game-specific args. */
+    /* Called during startup for each option ("-..." argument) the runner
+     * doesn't know, with the argument after it as val (NULL at the end).
+     * Return 0 if it isn't the game's (the runner ignores it, as before),
+     * 1 if the game used the option alone, 2 if it also used val (the
+     * runner then skips val). NULL = no game-specific options. */
     int       (*handle_arg)(const char *key, const char *val);
 
     /* One-line help text appended to --help output, or NULL. */
