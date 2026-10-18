@@ -2886,6 +2886,8 @@ int main(int argc, char *argv[])
                     "(header \"RA\" present, or range rejected)\n");
     }
     runner_sram_init_and_load(rom_path);
+    /* Game-supplied memory above the cartridge and ROM overlays (#92). */
+    if (g_game_spec.bus_setup) g_game_spec.bus_setup();
 
 #if GENESIS_HAS_RECOMP_NET
     genesis_identity_sha256(rom_raw, rom_raw_len, s_rom_sha256);

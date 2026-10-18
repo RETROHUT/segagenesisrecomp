@@ -128,6 +128,13 @@ typedef struct GameSpec {
      * 0 keeps the latch, as before. */
     int         sram_ungated;
 
+    /* Extra memory the game serves on the 68K bus (RETROHUT#92). Called once
+     * at startup, after the ROM is loaded and SRAM is set up, before the
+     * first frame. The game registers host buffers above the cartridge and
+     * ROM read overlays with bus_exp_map() / bus_exp_overlay()
+     * (video/bus_expansion.h). NULL = none: the bus behaves as before. */
+    void      (*bus_setup)(void);
+
     /* ---- Entry points (recompiled C) ---- */
     /* Called once on the game thread. Must contain the game's main
      * loop and not return — typically wraps func_NNNNNN(). NULL means

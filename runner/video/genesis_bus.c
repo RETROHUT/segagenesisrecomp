@@ -7,6 +7,7 @@
  * genesis_machine.c).
  */
 #include "genesis_bus.h"
+#include "bus_expansion.h"
 #include "hv_counter.h"
 #include "../audio/event_queue.h"
 #include <string.h>
@@ -257,8 +258,12 @@ uint16_t gbus_read16(GenesisBus *b, uint32_t a)
         uint32_t o = a - b->sram_base;
         return (uint16_t)((b->sram[o] << 8) | b->sram[(o + 1u) % b->sram_size]);
     }
-    if (a < 0x400000u)
-        return (uint16_t)((g_rom[a] << 8) | g_rom[a + 1]);          /* ROM     */
+    if (a < 0x400000u) {                                             /* ROM     */
+        uint16_t w = (uint16_t)((g_rom[a] << 8) | g_rom[a + 1]);
+        return bus_exp_rom_hit(a) ? bus_exp_rom16(a, w) : w;        /* overlays */
+    }
+    if (a < 0xA00000u)                         /* expansion regions, else open bus */
+        return g_bus_exp_regions ? bus_exp_read16(a) : 0xFFFFu;
     if (a >= 0xFF0000u) {                                            /* RAM     */
         uint16_t o = (uint16_t)(a & 0xFFFFu);
         return (uint16_t)((g_ram[o] << 8) | g_ram[(uint16_t)(o + 1)]);
@@ -305,8 +310,12 @@ uint16_t gbus_peek16(const GenesisBus *b, uint32_t a)
         uint32_t o = a - b->sram_base;
         return (uint16_t)((b->sram[o] << 8) | b->sram[(o + 1u) % b->sram_size]);
     }
-    if (a < 0x400000u)
-        return (uint16_t)((g_rom[a] << 8) | g_rom[a + 1]);
+    if (a < 0x400000u) {
+        uint16_t w = (uint16_t)((g_rom[a] << 8) | g_rom[a + 1]);
+        return bus_exp_rom_hit(a) ? bus_exp_rom16(a, w) : w;
+    }
+    if (a < 0xA00000u)
+        return g_bus_exp_regions ? bus_exp_read16(a) : 0xFFFFu;
     if (a >= 0xFF0000u) {
         uint16_t o = (uint16_t)(a & 0xFFFFu);
         return (uint16_t)((g_ram[o] << 8) | g_ram[(uint16_t)(o + 1)]);

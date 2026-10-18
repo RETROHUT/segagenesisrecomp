@@ -273,6 +273,24 @@ target_include_directories(m68k_interp_handler_test PRIVATE
 )
 
 # ---------------------------------------------------------------------------
+# bus_expansion_test — game-mapped regions above the cartridge and ROM read
+# overlays (RETROHUT#92).
+# ---------------------------------------------------------------------------
+add_executable(bus_expansion_test
+    harness/bus_expansion_test.c
+    "${CMAKE_CURRENT_LIST_DIR}/../runner/video/bus_expansion.c"
+)
+genesisrecomp_register_test(bus_expansion_test)
+if(MSVC)
+    target_compile_options(bus_expansion_test PRIVATE /UNDEBUG)
+else()
+    target_compile_options(bus_expansion_test PRIVATE -UNDEBUG)
+endif()
+target_include_directories(bus_expansion_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../runner/video"
+)
+
+# ---------------------------------------------------------------------------
 # codegen_stack_byte_step_test — byte-sized -(A7)/(A7)+ step A7 by 2 in the
 # generated C (the 68000 keeps the stack word-aligned); other An step by 1.
 # ---------------------------------------------------------------------------
