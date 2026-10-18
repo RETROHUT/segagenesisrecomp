@@ -2349,6 +2349,10 @@ int main(int argc, char *argv[])
             }
             custom_video_cli = argv[++i];
             s_custom_video_cli = custom_video_cli;
+        } else if (argv[i][0] == '-' && g_game_spec.handle_arg) {
+            /* A game-specific option; 2 = it took the next argument too. */
+            if (g_game_spec.handle_arg(argv[i], i + 1 < argc ? argv[i + 1] : NULL) >= 2)
+                i++;
         } else if (argv[i][0] != '-') {
             rom_path = argv[i];
         }
