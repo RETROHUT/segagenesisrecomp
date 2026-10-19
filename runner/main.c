@@ -2067,6 +2067,72 @@ static int run_recomp_launcher(const char *ltitle, const char *initial_rom, char
  * main
  * ========================================================================= */
 
+/* A game-drawn modal screen (GameSpec.modal_*): the guest is frozen, the
+ * game's panel is shown over the last game texture, and the player's
+ * presses go to the game until it closes the screen. */
+static void game_modal(SDL_Renderer *renderer, SDL_Texture *game, int *running, int turbo)
+{
+    SDL_Texture *panel = NULL;
+    int panel_w = 0, panel_h = 0;
+    audio_set_playback_enabled(0);
+    uint32_t prev_pad = gamepad_overlay_mask();
+    while (*running && g_game_spec.modal_active()) {
+        unsigned pressed = 0;
+        SDL_Event ev;
+        if (SDL_WaitEventTimeout(&ev, 16)) {
+            do {
+                gamepad_handle_event(&ev);
+                if (ev.type == SDL_QUIT) { *running = 0; break; }
+                if (ev.type != SDL_KEYDOWN) continue;
+                SDL_Keycode key = ev.key.keysym.sym;
+                if (key == SDLK_LEFT) pressed |= GAME_MODAL_LEFT;
+                else if (key == SDLK_RIGHT) pressed |= GAME_MODAL_RIGHT;
+                else if (key == SDLK_UP) pressed |= GAME_MODAL_UP;
+                else if (key == SDLK_DOWN) pressed |= GAME_MODAL_DOWN;
+                else if (!ev.key.repeat && (key == SDLK_RETURN || key == SDLK_SPACE))
+                    pressed |= GAME_MODAL_ACCEPT;
+                else if (!ev.key.repeat && key == SDLK_ESCAPE) pressed |= GAME_MODAL_CANCEL;
+            } while (*running && SDL_PollEvent(&ev));
+        }
+        if (!*running) break;
+        uint32_t pad = gamepad_overlay_mask();
+        uint32_t press = pad & ~prev_pad;
+        prev_pad = pad;
+        if (press & GP_OVERLAY_LEFT) pressed |= GAME_MODAL_LEFT;
+        if (press & GP_OVERLAY_RIGHT) pressed |= GAME_MODAL_RIGHT;
+        if (press & GP_OVERLAY_UP) pressed |= GAME_MODAL_UP;
+        if (press & GP_OVERLAY_DOWN) pressed |= GAME_MODAL_DOWN;
+        if (press & GP_OVERLAY_A) pressed |= GAME_MODAL_ACCEPT;
+        if (press & GP_OVERLAY_B) pressed |= GAME_MODAL_CANCEL;
+        if (pressed && g_game_spec.modal_input) g_game_spec.modal_input(pressed);
+        if (!g_game_spec.modal_active()) break;
+        int pw = 0, ph = 0;
+        const uint32_t *pixels = g_game_spec.modal_pixels ?
+                                 g_game_spec.modal_pixels(&pw, &ph) : NULL;
+        if (!pixels || pw <= 0 || ph <= 0) break;
+        if (!panel || pw != panel_w || ph != panel_h) {
+            if (panel) SDL_DestroyTexture(panel);
+            panel = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+                                      SDL_TEXTUREACCESS_STREAMING, pw, ph);
+            if (!panel) break;
+            SDL_SetTextureBlendMode(panel, SDL_BLENDMODE_BLEND);
+            panel_w = pw; panel_h = ph;
+        }
+        SDL_UpdateTexture(panel, NULL, pixels, pw * (int)sizeof(uint32_t));
+        SDL_Rect src = {0, 0, s_screen_width, s_screen_height};
+        int lw = display_logical_width();
+        int dw = s_screen_height * pw / ph;
+        if (dw > lw) dw = lw;
+        SDL_Rect dst = {(lw - dw) / 2, 0, dw, s_screen_height};
+        SDL_RenderClear(renderer);
+        SDL_RenderCopy(renderer, game, &src, NULL);
+        SDL_RenderCopy(renderer, panel, NULL, &dst);
+        SDL_RenderPresent(renderer);
+    }
+    if (panel) SDL_DestroyTexture(panel);
+    audio_set_playback_enabled(!turbo);
+}
+
 /* The guest is frozen while browsing a save or picking a rewind snapshot.
  * Present the last game texture behind the software-drawn panel. */
 static void local_states_modal(SDL_Renderer *renderer, SDL_Texture *game,
@@ -3295,6 +3361,11 @@ session_begin:;
             else if ((pad & menu) == menu && (prev_overlay_pad & menu) != menu)
                 overlay_request = 2;
             prev_overlay_pad = pad;
+        }
+        if (g_game_spec.modal_active && g_game_spec.modal_active()) {
+            game_modal(renderer, texture, &running, turbo);
+            prev_overlay_pad = gamepad_overlay_mask();
+            continue;
         }
         if (overlay_request) {
 #if GENESIS_HAS_RECOMP_NET

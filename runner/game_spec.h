@@ -287,7 +287,26 @@ typedef struct GameSpec {
      * use this to swap interpreter execution for native execution
      * one function at a time during divergence hunting. NULL+0 is
      * legal and means "no overrides". */
+
+    /* ---- Game modal screen ---- */
+    /* A screen the game draws itself (software ARGB8888 pixels) over the
+     * frozen picture. While modal_active returns non-zero the runner stops
+     * the guest, sends the player's presses to modal_input as GAME_MODAL_*
+     * bits (keyboard arrows, Enter/Space, Esc, or the gamepad) and shows
+     * modal_pixels (*w x *h, scaled to the window height, centred). The
+     * game closes the screen by making modal_active return 0. Checked at
+     * the top of every runner loop, so it can open before the first frame
+     * or later. NULL = no modal screen. */
+    int             (*modal_active)(void);
+    void            (*modal_input)(unsigned pressed);
+    const uint32_t *(*modal_pixels)(int *w, int *h);
 } GameSpec;
+
+enum {
+    GAME_MODAL_UP = 1u << 0, GAME_MODAL_DOWN = 1u << 1,
+    GAME_MODAL_LEFT = 1u << 2, GAME_MODAL_RIGHT = 1u << 3,
+    GAME_MODAL_ACCEPT = 1u << 4, GAME_MODAL_CANCEL = 1u << 5
+};
 
 /*
  * The single per-game spec instance. Each game project defines this
